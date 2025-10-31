@@ -13,13 +13,13 @@ GF_TELEGRAM_ID = int(os.getenv("GF_TELEGRAM_ID", "0"))
 # Data structure
 USERS = {
     YOUR_TELEGRAM_ID: {
-        "name": "You",
+        "name": "Sahith",
         "partner_id": GF_TELEGRAM_ID,
         "tasks": ["Exercise", "Studies", "No Masturbation"],
         "is_admin": True
     },
     GF_TELEGRAM_ID: {
-        "name": "Girlfriend",
+        "name": "Kritika",
         "partner_id": YOUR_TELEGRAM_ID,
         "tasks": ["Physics", "Chemistry", "Maths"],
         "is_admin": False
