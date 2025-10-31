@@ -6,6 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+import asyncio
 
 # Configure logging
 logging.basicConfig(
@@ -58,7 +59,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def start_web_server():
     """Start web server for health checks"""
-    port = int(os.getenv("PORT", 8080))
+    port = int(os.getenv("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), HealthHandler)
     logger.info(f"🌐 Web server running on port {port}")
     server.serve_forever()
@@ -458,20 +459,19 @@ async def check_and_send_monthly_report(context: ContextTypes.DEFAULT_TYPE):
     report_status[month_key] = True
     save_report_status(report_status)
 
-def main():
-    """Start the bot with web server"""
+async def main():
+    """Main function to start both bot and health server"""
     # Validate environment variables
     if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN environment variable is missing!")
+        logger.error("❌ BOT_TOKEN environment variable is required!")
         return
     
     if not YOUR_TELEGRAM_ID or not GF_TELEGRAM_ID:
-        logger.error("❌ User IDs environment variables are missing!")
+        logger.error("❌ User IDs environment variables are required!")
         return
     
-    # Start web server in a separate thread
-    web_thread = threading.Thread(target=start_web_server)
-    web_thread.daemon = True
+    # Start health server in a separate thread
+    web_thread = threading.Thread(target=start_web_server, daemon=True)
     web_thread.start()
     
     # Create Application
@@ -493,10 +493,7 @@ def main():
     
     # Start the Bot
     logger.info("🤖 Bot is running on Render...")
-    application.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
-    )
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
