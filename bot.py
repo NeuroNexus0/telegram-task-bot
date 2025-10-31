@@ -1,19 +1,9 @@
 import os
 import json
-import logging
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-import asyncio
-
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+from threading import Thread
 
 # Configuration - Use environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -42,28 +32,6 @@ REPORT_SENT_FILE = "data/report_sent.json"
 # Ensure data directory exists
 os.makedirs("data", exist_ok=True)
 
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        response = {
-            "status": "online",
-            "service": "Telegram Task Tracker Bot",
-            "timestamp": datetime.now().isoformat()
-        }
-        self.wfile.write(json.dumps(response).encode())
-    
-    def log_message(self, format, *args):
-        return  # Disable logs
-
-def start_web_server():
-    """Start web server for health checks"""
-    port = int(os.getenv("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
-    logger.info(f"🌐 Web server running on port {port}")
-    server.serve_forever()
-
 def load_data():
     """Load tracking data from file"""
     try:
@@ -72,7 +40,7 @@ def load_data():
                 return json.load(f)
         return {}
     except Exception as e:
-        logger.error(f"Error loading data: {e}")
+        print(f"Error loading data: {e}")
         return {}
 
 def save_data(data):
@@ -81,7 +49,7 @@ def save_data(data):
         with open(DATA_FILE, 'w') as f:
             json.dump(data, f, indent=2)
     except Exception as e:
-        logger.error(f"Error saving data: {e}")
+        print(f"Error saving data: {e}")
 
 def load_report_status():
     """Load report sent status"""
@@ -91,7 +59,7 @@ def load_report_status():
                 return json.load(f)
         return {}
     except Exception as e:
-        logger.error(f"Error loading report status: {e}")
+        print(f"Error loading report status: {e}")
         return {}
 
 def save_report_status(status):
@@ -100,7 +68,7 @@ def save_report_status(status):
         with open(REPORT_SENT_FILE, 'w') as f:
             json.dump(status, f, indent=2)
     except Exception as e:
-        logger.error(f"Error saving report status: {e}")
+        print(f"Error saving report status: {e}")
 
 def get_today_key():
     """Get today's date as a string key"""
@@ -117,271 +85,250 @@ def is_last_day_of_month():
     return today.month != tomorrow.month
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
+    """Start command handler"""
     user_id = update.effective_user.id
     
     if user_id not in USERS:
-        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        await update.message.reply_text("❌ You are not authorized to use this bot.")
+        return
+    
+    user_name = USERS[user_id]["name"]
+    welcome_message = f"""
+👋 Welcome {user_name}!
+
+This bot helps you and your partner track daily tasks.
+
+📋 Available Commands:
+/track - Mark today's tasks as complete
+/status - View your completion status
+/report - View monthly report
+/reset - Reset all data (admin only)
+
+Let's stay accountable together! 💪
+"""
+    await update.message.reply_text(welcome_message)
+
+async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show tasks for today with buttons to mark complete"""
+    user_id = update.effective_user.id
+    
+    if user_id not in USERS:
+        await update.message.reply_text("❌ You are not authorized to use this bot.")
         return
     
     user_name = USERS[user_id]["name"]
     tasks = USERS[user_id]["tasks"]
-    
-    message = f"Welcome {user_name}! 🎯\n\n"
-    message += "Your daily tasks:\n"
-    for i, task in enumerate(tasks, 1):
-        message += f"{i}. {task}\n"
-    message += "\nCommands:\n"
-    message += "/track - Mark today's completed tasks\n"
-    message += "/status - Check your today's status\n"
-    message += "/report - Get monthly report\n"
-    
-    if USERS[user_id]["is_admin"]:
-        message += "/reset - Reset all data (Admin only)\n"
-    
-    message += "\n💡 Monthly reports are sent automatically on the last day of each month!"
-    
-    await update.message.reply_text(message)
-
-async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show task selection menu"""
-    user_id = update.effective_user.id
-    
-    if user_id not in USERS:
-        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
-        return
-    
-    data = load_data()
     today = get_today_key()
-    user_key = str(user_id)
     
-    # Initialize today's data if not exists
-    if today not in data:
-        data[today] = {}
-    if user_key not in data[today]:
-        data[today][user_key] = []
-    
-    completed_tasks = data[today][user_key]
-    tasks = USERS[user_id]["tasks"]
+    # Load existing data
+    data = load_data()
+    user_data = data.get(str(user_id), {})
+    today_data = user_data.get(today, {})
     
     # Create inline keyboard
     keyboard = []
-    for i, task in enumerate(tasks):
-        status = "✅" if i in completed_tasks else "⬜"
+    for task in tasks:
+        status = "✅" if today_data.get(task, False) else "⬜"
         keyboard.append([InlineKeyboardButton(
             f"{status} {task}", 
-            callback_data=f"toggle_{i}"
+            callback_data=f"toggle_{task}"
         )])
-    
-    keyboard.append([InlineKeyboardButton("✉️ Send to Partner", callback_data="send_update")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message = f"📊 Track your tasks for {today}\n\n"
-    message += "Tap to toggle completion:"
+    completed = sum(1 for task in tasks if today_data.get(task, False))
+    total = len(tasks)
     
-    await update.message.reply_text(message, reply_markup=reply_markup)
+    message = f"""
+📅 *{user_name}'s Tasks for Today*
+_{today}_
+
+Progress: {completed}/{total} tasks completed
+
+Click on a task to toggle completion:
+"""
+    
+    await update.message.reply_text(
+        message, 
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button presses"""
+    """Handle button clicks"""
     query = update.callback_query
     user_id = query.from_user.id
     
     if user_id not in USERS:
-        await query.answer("Not authorized!")
+        await query.answer("❌ Unauthorized")
         return
     
     await query.answer()
     
-    data = load_data()
+    # Parse callback data
+    if not query.data.startswith("toggle_"):
+        return
+    
+    task_name = query.data.replace("toggle_", "")
+    tasks = USERS[user_id]["tasks"]
+    
+    if task_name not in tasks:
+        await query.edit_message_text("❌ Invalid task")
+        return
+    
+    # Toggle task completion
     today = get_today_key()
-    user_key = str(user_id)
+    data = load_data()
     
-    # Initialize if needed
-    if today not in data:
-        data[today] = {}
-    if user_key not in data[today]:
-        data[today][user_key] = []
+    if str(user_id) not in data:
+        data[str(user_id)] = {}
+    if today not in data[str(user_id)]:
+        data[str(user_id)][today] = {}
     
-    if query.data.startswith("toggle_"):
-        # Toggle task completion
-        task_index = int(query.data.split("_")[1])
-        
-        if task_index in data[today][user_key]:
-            data[today][user_key].remove(task_index)
-        else:
-            data[today][user_key].append(task_index)
-        
-        save_data(data)
-        
-        # Update the message
-        completed_tasks = data[today][user_key]
-        tasks = USERS[user_id]["tasks"]
-        
-        keyboard = []
-        for i, task in enumerate(tasks):
-            status = "✅" if i in completed_tasks else "⬜"
-            keyboard.append([InlineKeyboardButton(
-                f"{status} {task}", 
-                callback_data=f"toggle_{i}"
-            )])
-        
-        keyboard.append([InlineKeyboardButton("✉️ Send to Partner", callback_data="send_update")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        message = f"📊 Track your tasks for {today}\n\n"
-        message += "Tap to toggle completion:"
-        
-        await query.edit_message_text(message, reply_markup=reply_markup)
+    current_status = data[str(user_id)][today].get(task_name, False)
+    data[str(user_id)][today][task_name] = not current_status
     
-    elif query.data == "send_update":
-        # Send update to partner
+    save_data(data)
+    
+    # Update keyboard
+    today_data = data[str(user_id)][today]
+    keyboard = []
+    for task in tasks:
+        status = "✅" if today_data.get(task, False) else "⬜"
+        keyboard.append([InlineKeyboardButton(
+            f"{status} {task}", 
+            callback_data=f"toggle_{task}"
+        )])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    completed = sum(1 for task in tasks if today_data.get(task, False))
+    total = len(tasks)
+    user_name = USERS[user_id]["name"]
+    
+    message = f"""
+📅 *{user_name}'s Tasks for Today*
+_{today}_
+
+Progress: {completed}/{total} tasks completed
+
+Click on a task to toggle completion:
+"""
+    
+    await query.edit_message_text(
+        message,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+    # Notify partner if all tasks completed
+    if completed == total:
         partner_id = USERS[user_id]["partner_id"]
-        user_name = USERS[user_id]["name"]
-        tasks = USERS[user_id]["tasks"]
-        completed_tasks = data[today][user_key]
-        
-        message = f"📬 Update from {user_name} ({today}):\n\n"
-        for i, task in enumerate(tasks):
-            status = "✅" if i in completed_tasks else "❌"
-            message += f"{status} {task}\n"
-        
-        completion_rate = len(completed_tasks) / len(tasks) * 100
-        message += f"\n🎯 Completion: {len(completed_tasks)}/{len(tasks)} ({completion_rate:.0f}%)"
-        
+        notification = f"🎉 {user_name} has completed all tasks for today! Great job! 💪"
         try:
-            await context.bot.send_message(chat_id=partner_id, text=message)
-            await query.edit_message_text(
-                f"✅ Update sent to your partner!\n\n{message}"
-            )
+            await context.bot.send_message(chat_id=partner_id, text=notification)
         except Exception as e:
-            await query.edit_message_text(f"❌ Failed to send update: {str(e)}")
+            print(f"Error sending notification: {e}")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show today's status"""
+    """Show completion status for both users"""
     user_id = update.effective_user.id
     
     if user_id not in USERS:
-        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        await update.message.reply_text("❌ You are not authorized to use this bot.")
         return
     
     data = load_data()
     today = get_today_key()
-    user_key = str(user_id)
     
-    tasks = USERS[user_id]["tasks"]
-    completed_tasks = data.get(today, {}).get(user_key, [])
+    status_message = f"📊 *Status Report for {today}*\n\n"
     
-    message = f"📊 Your status for {today}:\n\n"
-    for i, task in enumerate(tasks):
-        status = "✅" if i in completed_tasks else "❌"
-        message += f"{status} {task}\n"
+    for uid, user_info in USERS.items():
+        user_name = user_info["name"]
+        tasks = user_info["tasks"]
+        user_data = data.get(str(uid), {})
+        today_data = user_data.get(today, {})
+        
+        completed = sum(1 for task in tasks if today_data.get(task, False))
+        total = len(tasks)
+        percentage = (completed / total * 100) if total > 0 else 0
+        
+        status_message += f"*{user_name}*\n"
+        status_message += f"Progress: {completed}/{total} ({percentage:.0f}%)\n"
+        
+        for task in tasks:
+            status = "✅" if today_data.get(task, False) else "❌"
+            status_message += f"  {status} {task}\n"
+        
+        status_message += "\n"
     
-    completion_rate = len(completed_tasks) / len(tasks) * 100 if tasks else 0
-    message += f"\n🎯 Completion: {len(completed_tasks)}/{len(tasks)} ({completion_rate:.0f}%)"
-    
-    await update.message.reply_text(message)
+    await update.message.reply_text(status_message, parse_mode='Markdown')
 
 def generate_monthly_report(data, month_key):
-    """Generate monthly report text"""
-    # Calculate stats for both users
-    stats = {}
-    for uid in USERS.keys():
-        user_key = str(uid)
-        total_days = 0
-        completed_days = 0
-        total_tasks_completed = 0
-        total_tasks_possible = 0
+    """Generate monthly report for both users"""
+    report = f"📊 *Monthly Report - {month_key}*\n\n"
+    
+    for uid, user_info in USERS.items():
+        user_name = user_info["name"]
+        tasks = user_info["tasks"]
+        user_data = data.get(str(uid), {})
         
-        for date_key, date_data in data.items():
-            if date_key.startswith(month_key):
-                if user_key in date_data:
-                    total_days += 1
-                    tasks_count = len(USERS[uid]["tasks"])
-                    completed_count = len(date_data[user_key])
-                    total_tasks_completed += completed_count
-                    total_tasks_possible += tasks_count
-                    
-                    if completed_count == tasks_count:
-                        completed_days += 1
+        # Filter dates for this month
+        month_dates = [date for date in user_data.keys() if date.startswith(month_key)]
         
-        consistency_rate = (completed_days / total_days * 100) if total_days > 0 else 0
-        completion_rate = (total_tasks_completed / total_tasks_possible * 100) if total_tasks_possible > 0 else 0
+        if not month_dates:
+            report += f"*{user_name}*: No data for this month\n\n"
+            continue
         
-        stats[uid] = {
-            "name": USERS[uid]["name"],
-            "total_days": total_days,
-            "completed_days": completed_days,
-            "consistency_rate": consistency_rate,
-            "completion_rate": completion_rate,
-            "total_tasks_completed": total_tasks_completed,
-            "total_tasks_possible": total_tasks_possible
-        }
+        # Calculate statistics
+        total_days = len(month_dates)
+        task_completion = {}
+        
+        for task in tasks:
+            completed_days = sum(1 for date in month_dates if user_data[date].get(task, False))
+            task_completion[task] = (completed_days / total_days * 100) if total_days > 0 else 0
+        
+        # Calculate overall completion
+        all_completions = [user_data[date].get(task, False) for date in month_dates for task in tasks]
+        overall_percentage = (sum(all_completions) / len(all_completions) * 100) if all_completions else 0
+        
+        report += f"*{user_name}*\n"
+        report += f"Days tracked: {total_days}\n"
+        report += f"Overall completion: {overall_percentage:.1f}%\n\n"
+        
+        for task, percentage in task_completion.items():
+            report += f"  • {task}: {percentage:.1f}%\n"
+        
+        report += "\n"
     
-    # Generate report
-    month_name = datetime.strptime(month_key, "%Y-%m").strftime("%B %Y")
-    message = f"📈 Monthly Report - {month_name}\n"
-    message += "=" * 35 + "\n\n"
-    
-    for uid, stat in stats.items():
-        message += f"👤 {stat['name']}:\n"
-        message += f"   📅 Days tracked: {stat['total_days']}\n"
-        message += f"   ✅ Perfect days: {stat['completed_days']}\n"
-        message += f"   🎯 Consistency: {stat['consistency_rate']:.1f}%\n"
-        message += f"   📊 Tasks: {stat['total_tasks_completed']}/{stat['total_tasks_possible']} ({stat['completion_rate']:.1f}%)\n\n"
-    
-    # Determine winner
-    user_ids = list(USERS.keys())
-    user_consistency = stats[user_ids[0]]["consistency_rate"]
-    partner_consistency = stats[user_ids[1]]["consistency_rate"]
-    
-    message += "🏆 Winner: "
-    if user_consistency > partner_consistency:
-        message += f"{stats[user_ids[0]]['name']} is more consistent! 🎉"
-    elif partner_consistency > user_consistency:
-        message += f"{stats[user_ids[1]]['name']} is more consistent! 🎉"
-    else:
-        message += "It's a tie! Both are equally consistent! 🤝"
-    
-    return message
+    return report
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate monthly report comparing both users"""
+    """Show monthly report"""
     user_id = update.effective_user.id
     
     if user_id not in USERS:
-        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        await update.message.reply_text("❌ You are not authorized to use this bot.")
         return
     
     data = load_data()
     month_key = get_month_key()
     
-    message = generate_monthly_report(data, month_key)
-    
-    # Send to requesting user
-    await update.message.reply_text(message)
-    
-    # Also send to partner
-    partner_id = USERS[user_id]["partner_id"]
-    try:
-        await context.bot.send_message(chat_id=partner_id, text=message)
-    except:
-        pass
+    report_text = generate_monthly_report(data, month_key)
+    await update.message.reply_text(report_text, parse_mode='Markdown')
 
 async def reset_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reset all tracking data (Admin only)"""
+    """Reset all data (admin only)"""
     user_id = update.effective_user.id
     
     if user_id not in USERS:
-        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        await update.message.reply_text("❌ You are not authorized to use this bot.")
         return
     
-    if not USERS[user_id]["is_admin"]:
-        await update.message.reply_text("❌ Only the admin can reset data!")
+    if not USERS[user_id].get("is_admin", False):
+        await update.message.reply_text("❌ Only admins can reset data.")
         return
     
-    # Create confirmation keyboard
     keyboard = [
         [
             InlineKeyboardButton("✅ Yes, Reset All", callback_data="confirm_reset"),
@@ -391,9 +338,9 @@ async def reset_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "⚠️ Are you sure you want to reset ALL tracking data?\n\n"
-        "This will delete all history and cannot be undone!",
-        reply_markup=reply_markup
+        "⚠️ *Warning*\n\nThis will delete ALL tracking data for both users. This action cannot be undone.\n\nAre you sure?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
 
 async def reset_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -401,33 +348,19 @@ async def reset_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     
-    if not USERS.get(user_id, {}).get("is_admin"):
-        await query.answer("Not authorized!")
+    if user_id not in USERS or not USERS[user_id].get("is_admin", False):
+        await query.answer("❌ Unauthorized")
         return
     
     await query.answer()
     
     if query.data == "confirm_reset":
-        # Delete the data file
-        if os.path.exists(DATA_FILE):
-            os.remove(DATA_FILE)
-        if os.path.exists(REPORT_SENT_FILE):
-            os.remove(REPORT_SENT_FILE)
-        
-        await query.edit_message_text("✅ All data has been reset! Starting fresh.")
-        
-        # Notify partner
-        partner_id = USERS[user_id]["partner_id"]
-        try:
-            await context.bot.send_message(
-                chat_id=partner_id,
-                text="🔄 Your partner has reset all tracking data. Starting fresh!"
-            )
-        except:
-            pass
-    
-    elif query.data == "cancel_reset":
-        await query.edit_message_text("❌ Reset cancelled. Data is safe!")
+        # Reset all data
+        save_data({})
+        save_report_status({})
+        await query.edit_message_text("✅ All data has been reset successfully.")
+    else:
+        await query.edit_message_text("❌ Reset cancelled.")
 
 async def check_and_send_monthly_report(context: ContextTypes.DEFAULT_TYPE):
     """Check if it's the last day of month and send report"""
@@ -438,43 +371,62 @@ async def check_and_send_monthly_report(context: ContextTypes.DEFAULT_TYPE):
     report_status = load_report_status()
     
     # Check if report already sent for this month
-    if report_status.get(month_key):
+    if report_status.get(month_key, False):
         return
     
+    # Generate and send report to both users
     data = load_data()
-    if not data:
-        return
+    report_text = generate_monthly_report(data, month_key)
+    report_text = "🎯 *End of Month Report*\n\n" + report_text
     
-    message = "🎉 End of Month Report!\n\n"
-    message += generate_monthly_report(data, month_key)
-    
-    # Send to both users
-    for user_id in USERS.keys():
+    for uid in USERS.keys():
         try:
-            await context.bot.send_message(chat_id=user_id, text=message)
+            await context.bot.send_message(
+                chat_id=uid,
+                text=report_text,
+                parse_mode='Markdown'
+            )
         except Exception as e:
-            logger.error(f"Failed to send report to {user_id}: {e}")
+            print(f"Error sending report to {uid}: {e}")
     
     # Mark report as sent
     report_status[month_key] = True
     save_report_status(report_status)
 
-async def main():
-    """Main function to start both bot and health server"""
+def start_web_server():
+    """Start a simple web server for Render health checks"""
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'Bot is running!')
+        
+        def log_message(self, format, *args):
+            return  # Disable logging
+    
+    server = HTTPServer(('0.0.0.0', int(os.getenv('PORT', '8080'))), HealthHandler)
+    server.serve_forever()
+
+def main():
+    """Start the bot with web server"""
     # Validate environment variables
-    if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN environment variable is required!")
+    if not BOT_TOKEN or not YOUR_TELEGRAM_ID or not GF_TELEGRAM_ID:
+        print("Error: Missing required environment variables!")
+        print(f"BOT_TOKEN: {'Set' if BOT_TOKEN else 'Missing'}")
+        print(f"YOUR_TELEGRAM_ID: {'Set' if YOUR_TELEGRAM_ID else 'Missing'}")
+        print(f"GF_TELEGRAM_ID: {'Set' if GF_TELEGRAM_ID else 'Missing'}")
         return
     
-    if not YOUR_TELEGRAM_ID or not GF_TELEGRAM_ID:
-        logger.error("❌ User IDs environment variables are required!")
-        return
-    
-    # Start health server in a separate thread
-    web_thread = threading.Thread(target=start_web_server, daemon=True)
+    # Start web server in a separate thread
+    web_thread = Thread(target=start_web_server)
+    web_thread.daemon = True
     web_thread.start()
+    print(f"Web server started on port {os.getenv('PORT', '8080')}")
     
-    # Create Application
+    # Create Telegram bot application
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Add handlers
@@ -490,10 +442,15 @@ async def main():
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(check_and_send_monthly_report, interval=3600, first=10)
+        print("Monthly report checker scheduled")
     
-    # Start the Bot
-    logger.info("🤖 Bot is running on Render...")
-    await application.run_polling()
+    # Start the bot
+    print("Bot is running on Render...")
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        close_loop=False
+    )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
