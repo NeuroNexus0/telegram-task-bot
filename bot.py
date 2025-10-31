@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -115,12 +115,12 @@ def is_last_day_of_month():
     tomorrow = today + timedelta(days=1)
     return today.month != tomorrow.month
 
-def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     user_id = update.effective_user.id
     
     if user_id not in USERS:
-        update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
         return
     
     user_name = USERS[user_id]["name"]
@@ -140,14 +140,14 @@ def start(update: Update, context: CallbackContext):
     
     message += "\n💡 Monthly reports are sent automatically on the last day of each month!"
     
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
-def track(update: Update, context: CallbackContext):
+async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show task selection menu"""
     user_id = update.effective_user.id
     
     if user_id not in USERS:
-        update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
         return
     
     data = load_data()
@@ -179,18 +179,18 @@ def track(update: Update, context: CallbackContext):
     message = f"📊 Track your tasks for {today}\n\n"
     message += "Tap to toggle completion:"
     
-    update.message.reply_text(message, reply_markup=reply_markup)
+    await update.message.reply_text(message, reply_markup=reply_markup)
 
-def button_callback(update: Update, context: CallbackContext):
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button presses"""
     query = update.callback_query
     user_id = query.from_user.id
     
     if user_id not in USERS:
-        query.answer("Not authorized!")
+        await query.answer("Not authorized!")
         return
     
-    query.answer()
+    await query.answer()
     
     data = load_data()
     today = get_today_key()
@@ -232,7 +232,7 @@ def button_callback(update: Update, context: CallbackContext):
         message = f"📊 Track your tasks for {today}\n\n"
         message += "Tap to toggle completion:"
         
-        query.edit_message_text(message, reply_markup=reply_markup)
+        await query.edit_message_text(message, reply_markup=reply_markup)
     
     elif query.data == "send_update":
         # Send update to partner
@@ -250,19 +250,19 @@ def button_callback(update: Update, context: CallbackContext):
         message += f"\n🎯 Completion: {len(completed_tasks)}/{len(tasks)} ({completion_rate:.0f}%)"
         
         try:
-            context.bot.send_message(chat_id=partner_id, text=message)
-            query.edit_message_text(
+            await context.bot.send_message(chat_id=partner_id, text=message)
+            await query.edit_message_text(
                 f"✅ Update sent to your partner!\n\n{message}"
             )
         except Exception as e:
-            query.edit_message_text(f"❌ Failed to send update: {str(e)}")
+            await query.edit_message_text(f"❌ Failed to send update: {str(e)}")
 
-def status(update: Update, context: CallbackContext):
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show today's status"""
     user_id = update.effective_user.id
     
     if user_id not in USERS:
-        update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
         return
     
     data = load_data()
@@ -280,7 +280,7 @@ def status(update: Update, context: CallbackContext):
     completion_rate = len(completed_tasks) / len(tasks) * 100 if tasks else 0
     message += f"\n🎯 Completion: {len(completed_tasks)}/{len(tasks)} ({completion_rate:.0f}%)"
     
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
 def generate_monthly_report(data, month_key):
     """Generate monthly report text"""
@@ -345,12 +345,12 @@ def generate_monthly_report(data, month_key):
     
     return message
 
-def report(update: Update, context: CallbackContext):
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate monthly report comparing both users"""
     user_id = update.effective_user.id
     
     if user_id not in USERS:
-        update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
         return
     
     data = load_data()
@@ -359,25 +359,25 @@ def report(update: Update, context: CallbackContext):
     message = generate_monthly_report(data, month_key)
     
     # Send to requesting user
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
     
     # Also send to partner
     partner_id = USERS[user_id]["partner_id"]
     try:
-        context.bot.send_message(chat_id=partner_id, text=message)
+        await context.bot.send_message(chat_id=partner_id, text=message)
     except:
         pass
 
-def reset_data(update: Update, context: CallbackContext):
+async def reset_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reset all tracking data (Admin only)"""
     user_id = update.effective_user.id
     
     if user_id not in USERS:
-        update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
         return
     
     if not USERS[user_id]["is_admin"]:
-        update.message.reply_text("❌ Only the admin can reset data!")
+        await update.message.reply_text("❌ Only the admin can reset data!")
         return
     
     # Create confirmation keyboard
@@ -389,22 +389,22 @@ def reset_data(update: Update, context: CallbackContext):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    update.message.reply_text(
+    await update.message.reply_text(
         "⚠️ Are you sure you want to reset ALL tracking data?\n\n"
         "This will delete all history and cannot be undone!",
         reply_markup=reply_markup
     )
 
-def reset_callback(update: Update, context: CallbackContext):
+async def reset_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle reset confirmation"""
     query = update.callback_query
     user_id = query.from_user.id
     
     if not USERS.get(user_id, {}).get("is_admin"):
-        query.answer("Not authorized!")
+        await query.answer("Not authorized!")
         return
     
-    query.answer()
+    await query.answer()
     
     if query.data == "confirm_reset":
         # Delete the data file
@@ -413,12 +413,12 @@ def reset_callback(update: Update, context: CallbackContext):
         if os.path.exists(REPORT_SENT_FILE):
             os.remove(REPORT_SENT_FILE)
         
-        query.edit_message_text("✅ All data has been reset! Starting fresh.")
+        await query.edit_message_text("✅ All data has been reset! Starting fresh.")
         
         # Notify partner
         partner_id = USERS[user_id]["partner_id"]
         try:
-            context.bot.send_message(
+            await context.bot.send_message(
                 chat_id=partner_id,
                 text="🔄 Your partner has reset all tracking data. Starting fresh!"
             )
@@ -426,9 +426,9 @@ def reset_callback(update: Update, context: CallbackContext):
             pass
     
     elif query.data == "cancel_reset":
-        query.edit_message_text("❌ Reset cancelled. Data is safe!")
+        await query.edit_message_text("❌ Reset cancelled. Data is safe!")
 
-def check_and_send_monthly_report(context: CallbackContext):
+async def check_and_send_monthly_report(context: ContextTypes.DEFAULT_TYPE):
     """Check if it's the last day of month and send report"""
     if not is_last_day_of_month():
         return
@@ -450,7 +450,7 @@ def check_and_send_monthly_report(context: CallbackContext):
     # Send to both users
     for user_id in USERS.keys():
         try:
-            context.bot.send_message(chat_id=user_id, text=message)
+            await context.bot.send_message(chat_id=user_id, text=message)
         except Exception as e:
             logger.error(f"Failed to send report to {user_id}: {e}")
     
@@ -474,30 +474,29 @@ def main():
     web_thread.daemon = True
     web_thread.start()
     
-    # Create Updater
-    updater = Updater(BOT_TOKEN, use_context=True)
-    
-    # Get the dispatcher to register handlers
-    dp = updater.dispatcher
+    # Create Application
+    application = Application.builder().token(BOT_TOKEN).build()
     
     # Add handlers
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("track", track))
-    dp.add_handler(CommandHandler("status", status))
-    dp.add_handler(CommandHandler("report", report))
-    dp.add_handler(CommandHandler("reset", reset_data))
-    dp.add_handler(CallbackQueryHandler(reset_callback, pattern="^(confirm_reset|cancel_reset)$"))
-    dp.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("track", track))
+    application.add_handler(CommandHandler("status", status))
+    application.add_handler(CommandHandler("report", report))
+    application.add_handler(CommandHandler("reset", reset_data))
+    application.add_handler(CallbackQueryHandler(reset_callback, pattern="^(confirm_reset|cancel_reset)$"))
+    application.add_handler(CallbackQueryHandler(button_callback))
     
     # Schedule monthly report check (runs every hour)
-    job_queue = updater.job_queue
+    job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(check_and_send_monthly_report, interval=3600, first=10)
     
     # Start the Bot
     logger.info("🤖 Bot is running on Render...")
-    updater.start_polling()
-    updater.idle()
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
 
 if __name__ == "__main__":
     main()
